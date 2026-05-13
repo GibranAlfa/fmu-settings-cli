@@ -14,7 +14,6 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from fmu_settings_cli.__main__ import app
-from fmu_settings_cli.init.cli import _find_global_config_source
 
 runner = CliRunner()
 
@@ -154,13 +153,13 @@ def test_init_adds_global_variables_with_masterdata(
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
     stdout = " ".join(result.stdout.split())
-    assert "Success: Successfully imported access, masterdata, model from" in stdout
+    assert (
+        "Success: Successfully imported access, masterdata, model from global "
+        "config." in stdout
+    )
     assert "Success: All done!" in stdout
     assert "Info: Project stratigraphy was not imported by 'fmu init'." in stdout
     assert "Open 'fmu settings' to import stratigraphy from RMS" in stdout
-    assert _find_global_config_source(tmp_path) == (
-        fmuconfig_out / "global_variables.yml"
-    )
 
     fmu_dir = find_nearest_fmu_directory()
     fmu_dir_cfg = fmu_dir.config.load()
@@ -173,7 +172,7 @@ def test_init_adds_input_global_config_with_masterdata(
     in_fmu_project: Path,
     generate_strict_valid_globalconfiguration: Callable[[], GlobalConfiguration],
 ) -> None:
-    """Tests that 'fmu init' reports the input config file it imported from."""
+    """Tests that 'fmu init' reports successful input config import."""
     tmp_path = in_fmu_project
 
     valid_global_cfg = generate_strict_valid_globalconfiguration()
@@ -188,9 +187,11 @@ def test_init_adds_input_global_config_with_masterdata(
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
     stdout = " ".join(result.stdout.split())
-    assert "Success: Successfully imported access, masterdata, model from" in stdout
+    assert (
+        "Success: Successfully imported access, masterdata, model from global "
+        "config." in stdout
+    )
     assert "Success: All done!" in stdout
-    assert _find_global_config_source(tmp_path) == global_config_path
 
 
 def test_init_raises_when_import_drogon_masterdata(
@@ -235,6 +236,43 @@ def test_init_fmu_dir_exists_error(in_fmu_project: Path) -> None:
     assert ".fmu already exists" in result.stderr
     assert "You do not need to initialize a .fmu in this directory." in result.stderr
     assert "Aborted." in result.stderr
+
+
+def test_init_fmu_path_exists_but_is_not_directory(in_fmu_project: Path) -> None:
+    """Tests that a non-directory .fmu path gives a specific error."""
+    fmu_path = in_fmu_project / ".fmu"
+    fmu_path.write_text("not a directory")
+
+    result = runner.invoke(app, ["init"])
+    stderr = "".join(result.stderr.split())
+
+    assert result.exit_code == 1
+    assert "Error: Unable to create .fmu directory" in result.stderr
+    assert f"{fmu_path} exists but is not a directory".replace(" ", "") in stderr
+    assert "Delete this file before initializing .fmu." in result.stderr
+    assert "Aborted." in result.stderr
+
+
+def test_init_fmu_dir_exists_skips_global_config_messages(
+    in_fmu_project: Path,
+    generate_strict_valid_globalconfiguration: Callable[[], GlobalConfiguration],
+) -> None:
+    """Tests that existing .fmu errors do not emit unrelated import messages."""
+    (in_fmu_project / ".fmu").mkdir()
+
+    valid_global_cfg = generate_strict_valid_globalconfiguration()
+    fmuconfig_out = in_fmu_project / "fmuconfig/output"
+    fmuconfig_out.mkdir(parents=True, exist_ok=True)
+    (fmuconfig_out / "global_variables.yml").write_text(
+        yaml.dump(valid_global_cfg.model_dump(mode="json", by_alias=True))
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert "Successfully imported" not in result.stdout
+    assert "Unable to import masterdata" not in result.stderr
+    assert ".fmu already exists" in result.stderr
 
 
 def test_init_fmu_dir_no_permissions_error(in_fmu_project: Path) -> None:
